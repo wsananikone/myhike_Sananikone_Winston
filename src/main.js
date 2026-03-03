@@ -117,6 +117,9 @@ function displayCardsDynamically() {
                 // 👇 ADD THIS LINE TO SET THE IMAGE SOURCE
                 newcard.querySelector('.card-image').src = `./images/${hike.code}.jpg`;
 
+                // Add the link with the document ID
+                newcard.querySelector(".read-more").href = `eachHike.html?docID=${doc.id}`;
+
                 // Append to container
                 document.getElementById("hikes-go-here").appendChild(newcard);
             });
