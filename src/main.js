@@ -1,30 +1,44 @@
+import { onAuthReady } from "./authentication.js";
 import { db } from "./firebaseConfig.js";
-import { doc, onSnapshot } from "firebase/firestore";
-import { onAuthReady } from "./authentication.js"
-import { collection, getDocs, addDoc, serverTimestamp } from "firebase/firestore";
+import { doc, onSnapshot, getDoc, collection, getDocs, addDoc, serverTimestamp, updateDoc, arrayUnion, arrayRemove } from "firebase/firestore";
+
 
 function showName() {
-    const nameElement = document.getElementById("name-goes-here"); // the <h1> element to display "Hello, {name}"
 
-    // Wait for Firebase to determine the current authentication state.
-    // onAuthReady() runs the callback once Firebase finishes checking the signed-in user.
-    // The user's name is extracted from the Firebase Authentication object
-    // You can "go to console" to check out current users. 
-    onAuthReady((user) => {
+    // Get the DOM element where the user's name will be displayed
+    // Example: <h1 id="name-goes-here"></h1>
+    const nameElement = document.getElementById("name-goes-here");
+
+    // Wait until Firebase Auth finishes checking the user's auth state
+    onAuthReady(async (user) => {
+
+        // If no user is logged in, redirect to the login page
         if (!user) {
-            // If no user is signed in → redirect back to login page.
             location.href = "index.html";
-            return;
+            return; // Stop execution
         }
 
-        // If a user is logged in:
-        // Use their display name if available, otherwise show their email.
-        const name = user.displayName || user.email;
+        // Get the user's Firestore document from the "users" collection
+        // Document ID is the user's unique UID
+        const userDoc = await getDoc(doc(db, "users", user.uid));
+        const userData = userDoc.exists() ? userDoc.data() : {};
 
-        // Update the welcome message with their name/email.
+        // Determine which name to display:
+        const name = userDoc.exists()            // 1️⃣ Use Firestore name if document exists
+            ? userDoc.data().name                // 2️⃣ Otherwise fallback to Firebase displayName
+            : user.displayName || user.email;    // 3️⃣ Otherwise fallback to email
+
+        // If the DOM element exists, update its text using a template literal to add "!"
         if (nameElement) {
             nameElement.textContent = `${name}!`;
         }
+
+        //Read bookmarks as a plain array (no globals)
+        const bookmarks = userData.bookmarks || [];
+
+        //Display cards, but now pass user's ID and bookmarks (array)
+        await displayCardsDynamically(user.uid, bookmarks);
+
     });
 }
 
@@ -96,41 +110,143 @@ function seedHikes() {
 }
 
 
-function displayCardsDynamically() {
+//---------------------------------------------------------------------------------
+// This function is called when the page loads (from showName())
+// It will populate the Gallery with one card for each Hike. 
+// For each Hike it can decide if the bookmark icon is solid or outline
+// based on the the User's ID, and bookmarks array
+//---------------------------------------------------------------------------------
+async function displayCardsDynamically(userId, bookmarks) {
     let cardTemplate = document.getElementById("hikeCardTemplate");
     const hikesCollectionRef = collection(db, "hikes");
 
-    getDocs(hikesCollectionRef)
-        .then((querySnapshot) => {
+    try {
+        const querySnapshot = await getDocs(hikesCollectionRef);
+        querySnapshot.forEach(docSnap => {
+            // Clone the card template
+            let newcard = cardTemplate.content.cloneNode(true);
+            const hike = docSnap.data(); // Get hike data once
 
-            querySnapshot.forEach((doc) => {
+            // Populate the card with hike data
+            newcard.querySelector('.card-title').textContent = hike.name;
+            newcard.querySelector('.card-text').textContent = hike.details || `Located in ${hike.city}.`;
+            newcard.querySelector('.card-length').textContent = hike.length;
 
-                // Clone the template
-                let newcard = cardTemplate.content.cloneNode(true);   //cardTemplate.content gives inside of the template. cloneNode(true) make a deep copy
-                const hike = doc.data();
+            newcard.querySelector('.card-image').src = `./images/${hike.code}.jpg`;
 
-                // Populate the card
-                newcard.querySelector('.card-title').textContent = hike.name;
-                newcard.querySelector('.card-text').textContent = hike.details || `Located in ${hike.city}.`;
-                newcard.querySelector('.card-length').textContent = hike.length;
+            // Add the link with the document ID
+            newcard.querySelector(".read-more").href = `eachHike.html?docID=${docSnap.id}`;
 
-                // 👇 ADD THIS LINE TO SET THE IMAGE SOURCE
-                newcard.querySelector('.card-image').src = `./images/${hike.code}.jpg`;
+            // -------- NEW CODE STARTS HERE ---------
+            const hikeDocID = docSnap.id;
+            const icon = newcard.querySelector("i.material-icons");
 
-                // Add the link with the document ID
-                newcard.querySelector(".read-more").href = `eachHike.html?docID=${doc.id}`;
+            // Give this icon a unique id based on the hike ID
+            icon.id = "save-" + hikeDocID;
 
-                // Append to container
-                document.getElementById("hikes-go-here").appendChild(newcard);
-            });
+            // Decide initial state from bookmarks array
+            const isBookmarked = bookmarks.includes(hikeDocID);
 
-        })
-        .catch((error) => {
-            console.error("Error getting documents: ", error);
+            // Set initial bookmark icon based on whether this hike is already in the user's bookmarks
+            icon.innerText = isBookmarked ? "bookmark" : "bookmark_border";
+
+            // On click, call a toggleBookmark
+            icon.onclick = () => toggleBookmark(userId, hikeDocID);
+            // -------- NEW CODE ENDS HERE ---------
+
+            // Attach the new card to the container
+            document.getElementById("hikes-go-here").appendChild(newcard);
         });
+    } catch (error) {
+        console.error("Error getting documents: ", error);
+    }
+}
+async function toggleBookmark(userId, hikeDocID) {
+    const userRef = doc(db, "users", userId);     // get a pointer to the user's document
+    const userSnap = await getDoc(userRef);       // read the user's document one time
+    const userData = userSnap.data() || {};       // default to empty user data
+    const bookmarks = userData.bookmarks || [];   // default to empty bookmarks array
+
+    const iconId = "save-" + hikeDocID;           // construct icon's unique ID given the hike ID
+    const icon = document.getElementById(iconId); // get a pointer to icon DOM
+
+    // JS function ".includes" will return true if an item is found in the array
+    const isBookmarked = bookmarks.includes(hikeDocID);
+
+    // Because this block of code as two aynchronous calls that can be risky/fail
+    // Here's an example of how to wrap it with a try/catch structure for error handling. 
+    try {
+        if (isBookmarked) {
+            // Remove from Firestore array
+            await updateDoc(userRef, { bookmarks: arrayRemove(hikeDocID) });
+            // Update the bookmark icon DOM
+            icon.innerText = "bookmark_border";
+
+        } else {
+            // Add to Firestore array
+            await updateDoc(userRef, { bookmarks: arrayUnion(hikeDocID) });
+            // Update the bookmark icon DOM 
+            icon.innerText = "bookmark";
+        }
+    } catch (err) {
+        console.error("Error toggling bookmark:", err);
+    }
 }
 
-displayCardsDynamically();
+async function renderSavedHikes(userId) {
+    const hikeCardGroup = document.getElementById("hikeCardGroup");
+    const newcardTemplate = document.getElementById("savedCardTemplate");
+
+    // Clear existing cards
+    hikeCardGroup.innerHTML = "";
+
+    try {
+        const userRef = doc(db, "users", userId);
+        const userDocSnap = await getDoc(userRef);
+
+        if (!userDocSnap.exists()) {
+            console.log("User does not exist:", userId);
+            hikeCardGroup.innerHTML = "<p>User does not exist.</p>";
+            return;
+        }
+
+        const userData = userDocSnap.data();
+        const bookmarks = userData.bookmarks || [];
+
+        if (bookmarks.length === 0) {
+            hikeCardGroup.innerHTML = "<p>No saved hikes found.</p>";
+            return;
+        }
+
+        for (const hikeId of bookmarks) {
+            try {
+                const hikeRef = doc(db, "hikes", hikeId);
+                const hikeDocSnap = await getDoc(hikeRef);
+
+                if (!hikeDocSnap.exists()) {
+                    console.log("No hike document for ID", hikeId);
+                    continue;
+                }
+
+                const hikeData = hikeDocSnap.data();
+                const newcard = newcardTemplate.content.cloneNode(true);
+                newcard.querySelector(".card-title").innerText = hikeData.name;
+                newcard.querySelector(".card-text").textContent = hikeData.details || `Located in ${hikeData.city}.`;
+                newcard.querySelector(".card-length").innerText = hikeData.length;
+                newcard.querySelector(".card-image").src = `./images/${hikeData.code}.jpg`;
+                newcard.querySelector("a").href = "eachHike.html?docID=" + hikeId;
+                hikeCardGroup.appendChild(newcard);
+
+            } catch (hikeError) {
+                console.error("Error loading hike:", hikeId, hikeError);
+            }
+        }
+
+    } catch (error) {
+        console.error("Error rendering saved hikes:", error);
+        hikeCardGroup.innerHTML = "<p>Something went wrong while loading saved hikes.</p>";
+    }
+}
 
 // Call the seeding function when the main.html page loads.
 seedHikes();
