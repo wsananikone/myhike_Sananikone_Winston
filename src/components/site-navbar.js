@@ -2,6 +2,7 @@
 import { onAuthStateChanged } from "firebase/auth"; //Detect login state
 import { auth } from "/src/firebaseConfig.js"; //Firebase authentication connection
 import { logoutUser } from "/src/authentication.js"; //Perform logout action
+import whaleLogo from "/images/whale.png";
 
 class SiteNavbar extends HTMLElement {
     constructor() {
@@ -12,11 +13,10 @@ class SiteNavbar extends HTMLElement {
 
     renderNavbar() {
         this.innerHTML = `
-            <!-- Navbar: single source of truth -->
             <nav class="navbar navbar-expand-lg navbar-light bg-info">
                 <div class="container-fluid">
-                        <a class="navbar-brand" href="/main.html">
-                        <img src="../public/images/whale.png" height="36">
+                    <a class="navbar-brand" href="/main.html">
+                        <img src="${whaleLogo}" height="36">
                         WinstonHikes
                     </a>
                     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarSupportedContent"
